@@ -2,7 +2,6 @@ import { FastMCP, UserError } from 'fastmcp';
 import type { Content } from 'fastmcp';
 import { z } from 'zod';
 import { defineTool } from '../lib/define-tool.js';
-import { profileField } from './schemas.js';
 import { AnalyticsHelper } from '../lib/analytics.js';
 import type {
   FunctionParams,
@@ -10,19 +9,18 @@ import type {
   McpConfig,
 } from '../@types/types.js';
 
-export const FunctionParamsSchema = z.object({
+export const FunctionParamsSchema = z.strictObject({
   code: z
     .string()
     .describe(
-      'JavaScript (ESM) code to execute. The default export receives ' +
-        '{ page, context } and should return { data, type } where data ' +
-        'is the response payload and type is the Content-Type string.',
+      'Browser-context ESM code. The async default export receives { page, context }. ' +
+        'Return a raw value, string, or binary typed array, not a { data, type } envelope.',
     ),
   context: z
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      'Optional context object passed to the function as the second argument.',
+      'Optional data available as context in the default export argument.',
     ),
   timeout: z
     .number()
@@ -30,7 +28,6 @@ export const FunctionParamsSchema = z.object({
     .positive()
     .optional()
     .describe('Request timeout in milliseconds'),
-  profile: profileField('before the function executes'),
 });
 
 /**
@@ -100,9 +97,8 @@ export const formatFunctionContent = (
     throw new UserError(
       `Function returned ${response.data.length} chars (~${approxTokens} tokens), ` +
         `exceeding the ${MAX_TEXT_RESPONSE_CHARS}-char (~${capTokens}-token) limit. ` +
-        `Either filter/summarize inside your function, or — for binary outputs — ` +
-        `return { type: "image/jpeg" } / "image/png" / "audio/mpeg" / "application/pdf" ` +
-        `from your function so the bytes come back as a proper content block instead of base64 text.`,
+        `Filter or summarize inside your function. For image/png or application/pdf output, ` +
+        `return the raw bytes from page.screenshot() or page.pdf(), not a { data, type } envelope.`,
     );
   }
 
@@ -121,21 +117,15 @@ export function registerFunctionTool(
     name: 'browserless_function',
     failureStatus: { origin: 'api', badRequest: 'SCRIPT_ERROR' },
     description:
-      'Execute custom Puppeteer JavaScript code on the Browserless cloud. ' +
-      'Your function receives a Puppeteer `page` object and optional `context` data. ' +
-      'Return { data, type } to control the response payload and Content-Type. ' +
-      '\n\n' +
-      'For binary outputs, set `type` to a real MIME so the bytes come back as a proper ' +
-      'content block instead of base64 text:\n' +
-      '  - `image/png` / `image/jpeg` / `image/webp` → vision content block (~1.5K tokens)\n' +
-      '  - `audio/mpeg` / `audio/wav` → audio content block\n' +
-      '  - `application/pdf` and other binaries → resource content block (attachment)\n' +
-      '\n' +
-      'Text responses are capped at 200,000 characters (~50K tokens). Larger text payloads ' +
-      'will be rejected — filter or summarize inside your function, or switch to a binary ' +
-      'type if you actually meant to return bytes.\n' +
-      '\n' +
-      'Useful for complex scraping, form filling, or any browser automation that requires custom code.',
+      'Execute Puppeteer JavaScript on the configured self-hosted Browserless instance. ' +
+      'Use an async ESM default export, for example export default async ({ page, context }) => { ' +
+      'await page.goto(context.url); return await page.title(); }. ' +
+      'Code runs in a browser context, not Node.js. process, Buffer, require, and module are unavailable. ' +
+      'Return raw JSON values, text, HTML, or binary typed arrays. ' +
+      'Return await page.screenshot({ type: "png" }) for an image block, ' +
+      'or await page.pdf() for a PDF resource block. ' +
+      'Browserless determines the response MIME type. Objects with data and type fields remain literal JSON. ' +
+      'Text responses are capped at 200,000 characters. Filter larger results inside the function.',
     parameters: FunctionParamsSchema,
     annotations: {
       title: 'Browserless Function',
@@ -143,17 +133,14 @@ export function registerFunctionTool(
       destructiveHint: true,
       openWorldHint: true,
     },
-    profileNotFoundMessage: (profile) =>
-      `Profile "${profile}" was not found for the configured API ` +
-      `token. Create the profile with Browserless.saveProfile in a ` +
-      `live session first, or omit the profile parameter to run the ` +
-      `function anonymously.`,
     run: async ({ client, params, log }) => {
+      if ('profile' in params) {
+        throw new UserError('Authentication profiles are not supported.');
+      }
       const response = await client.runFunction({
         code: params.code,
         context: params.context,
         timeout: params.timeout,
-        profile: params.profile,
       });
       log.debug(
         `Function response: ok=${response.ok}, status=${response.statusCode}, ` +
@@ -161,12 +148,11 @@ export function registerFunctionTool(
       );
       return response;
     },
-    analyticsProps: (params, result) => ({
+    analyticsProps: (_params, result) => ({
       ok: result.ok,
       status_code: result.statusCode,
       content_type: result.contentType,
       size: result.size,
-      profile_used: !!params.profile,
     }),
     format: (response) => {
       if (!response.ok) {

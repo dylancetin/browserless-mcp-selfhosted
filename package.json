@@ -1,19 +1,19 @@
 {
-  "name": "@browserless.io/mcp",
+  "name": "browserless-mcp-selfhosted",
   "version": "1.39.0",
-  "mcpName": "io.browserless/mcp",
-  "description": "MCP (Model Context Protocol) server for the Browserless.io browser automation platform",
+  "private": true,
+  "description": "MCP server for self-hosted Browserless function execution and Lighthouse audits",
   "author": "browserless.io",
   "license": "SSPL-1.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/browserless/browserless-mcp.git"
+    "url": "git+https://github.com/dylancetin/browserless-mcp-selfhosted.git"
   },
   "type": "module",
   "main": "./build/src/index.js",
   "types": "./build/src/index.d.ts",
   "bin": {
-    "browserless-mcp": "./bin/cli.js"
+    "browserless-mcp-selfhosted": "./bin/cli.js"
   },
   "exports": {
     ".": {
@@ -60,11 +60,12 @@
     "build:types": "mkdir -p build/src/@types && cp src/@types/*.d.ts build/src/@types/",
     "clean": "rm -rf build",
     "dev": "BROWSERLESS_TOKEN=${BROWSERLESS_TOKEN:-test} node --watch build/src/index.js",
-    "lint": "eslint src test",
+    "lint": "eslint src test scripts/verify-selfhosted.mjs",
     "test": "npm run build && mocha",
     "coverage": "npm run build && c8 --reporter=text --reporter=html --reporter=lcov --check-coverage --lines 80 --branches 70 --functions 80 mocha",
     "start": "node build/src/index.js",
-    "start:http": "TRANSPORT=httpStream PORT=8080 node build/src/index.js",
+    "start:http": "TRANSPORT=httpStream node build/src/index.js",
+    "verify:selfhosted": "node scripts/verify-selfhosted.mjs",
     "prepack": "npm run build",
     "postinstall": "node scripts/patch-fastmcp.mjs",
     "prepare": "husky",

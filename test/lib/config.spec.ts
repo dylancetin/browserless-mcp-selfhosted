@@ -29,6 +29,56 @@ const BASELINE_PATTERNS = [
   'https://eu1.make.celonis.com/oauth/cb/mcp',
 ];
 
+describe('self-hosted configuration', () => {
+  const keys = ['BROWSERLESS_API_URL', 'MCP_BASE_URL', 'PORT'];
+  let original: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+  });
+  afterEach(() => {
+    for (const key of keys) {
+      if (original[key] === undefined) delete process.env[key];
+      else process.env[key] = original[key];
+    }
+  });
+
+  it('defaults to local Browserless and MCP URLs', () => {
+    expect(getConfig().browserlessApiUrl).to.equal('http://localhost:3000');
+    expect(getConfig().mcpBaseUrl).to.equal('http://localhost:8080');
+  });
+
+  it('uses the configured HTTP port unless MCP_BASE_URL is explicit', () => {
+    process.env.PORT = '9080';
+    expect(getConfig().mcpBaseUrl).to.equal('http://localhost:9080');
+    process.env.MCP_BASE_URL = 'https://mcp.example.test';
+    expect(getConfig().mcpBaseUrl).to.equal('https://mcp.example.test');
+  });
+
+  it('normalizes the configured runtime base', () => {
+    process.env.BROWSERLESS_API_URL = 'http://browserless:3000/runtime///';
+    expect(getConfig().browserlessApiUrl).to.equal(
+      'http://browserless:3000/runtime',
+    );
+  });
+
+  it('rejects empty, malformed, non-HTTP, and credential-bearing runtime URLs', () => {
+    for (const value of [
+      '',
+      'not a URL',
+      'file:///runtime',
+      'http://user:secret@browserless',
+      'http://browserless?token=secret',
+      'http://browserless#',
+      'http://browserless?',
+    ]) {
+      process.env.BROWSERLESS_API_URL = value;
+      expect(() => getConfig()).to.throw();
+    }
+  });
+});
+
 describe('config.uploadDirs', () => {
   let originalDownload: string | undefined;
   let originalUpload: string | undefined;
@@ -144,7 +194,7 @@ describe('config.allowedApiUrlHosts', () => {
   });
 });
 
-describe('config.complianceMode', () => {
+describe('config.complianceMode for upstream helpers', () => {
   const COMPLIANCE_KEY = 'MCP_COMPLIANCE_MODE';
   let original: string | undefined;
 
@@ -158,7 +208,7 @@ describe('config.complianceMode', () => {
     else process.env[COMPLIANCE_KEY] = original;
   });
 
-  it('defaults to false (full surface) when the env var is unset', () => {
+  it('defaults the compatibility field to false when unset', () => {
     expect(getConfig().complianceMode).to.equal(false);
   });
 
@@ -178,7 +228,7 @@ describe('config.complianceMode', () => {
     }
   });
 
-  it('serves the full surface only for unset or an explicit opt-out token', () => {
+  it('sets the compatibility field to false for explicit opt-out values', () => {
     for (const v of ['false', '0', 'no', 'off', 'FALSE', ' off ']) {
       process.env[COMPLIANCE_KEY] = v;
       expect(getConfig().complianceMode, `value ${JSON.stringify(v)}`).to.equal(

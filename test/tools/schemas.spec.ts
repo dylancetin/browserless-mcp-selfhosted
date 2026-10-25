@@ -784,7 +784,7 @@ describe('profile field (shared profileField helper)', () => {
 
   it('accepts a profile name omitted', () => {
     const parsed = FunctionParamsSchema.parse({ code: 'x' });
-    expect(parsed.profile).to.be.undefined;
+    expect(parsed).to.not.have.property('profile');
   });
 
   it('rejects a profile name containing NUL (agent schema)', () => {

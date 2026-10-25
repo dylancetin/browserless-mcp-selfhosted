@@ -2,11 +2,8 @@ import { FastMCP, UserError } from 'fastmcp';
 import type { Content } from 'fastmcp';
 import { z } from 'zod';
 import { defineTool, assertHttpScheme } from '../lib/define-tool.js';
-import { profileField } from './schemas.js';
-import { isCompliant } from './compliance.js';
 import { AnalyticsHelper } from '../lib/analytics.js';
 import { downloadOwner, storeDownload } from '../lib/download-store.js';
-import { describeReadyDownload } from './agent.js';
 import type {
   McpConfig,
   PerformanceParams,
@@ -17,20 +14,19 @@ export const LighthouseCategorySchema = z.enum([
   'accessibility',
   'best-practices',
   'performance',
-  'pwa',
   'seo',
 ]);
 
 export const LighthouseDeviceSchema = z.enum(['mobile', 'desktop']);
 
-export const PerformanceParamsSchema = z.object({
+export const PerformanceParamsSchema = z.strictObject({
   url: z.url().describe('The URL to audit (must be http or https)'),
   categories: z
     .array(LighthouseCategorySchema)
     .optional()
     .describe(
       'Lighthouse categories to audit: "accessibility", "best-practices", ' +
-        '"performance", "pwa", "seo". Omit for all categories.',
+        '"performance", "seo". Omit for all categories.',
     ),
   device: LighthouseDeviceSchema.optional().describe(
     'Device to emulate during the audit: "mobile" or "desktop". Applies ' +
@@ -59,26 +55,13 @@ export const PerformanceParamsSchema = z.object({
     .positive()
     .optional()
     .describe('Request timeout in milliseconds (audits can take 30s–120s)'),
-  profile: profileField('before the Lighthouse audit runs'),
 });
-
-// Excludes `profile` (auth-session hydration) — no authentication-profile
-// capability on the compliant surface (parity with agent/export/search).
-const CompliantPerformanceParamsSchema = PerformanceParamsSchema.pick({
-  url: true,
-  categories: true,
-  device: true,
-  config: true,
-  budgets: true,
-  timeout: true,
-}).strict();
 
 export function registerPerformanceTool(
   server: FastMCP,
   config: McpConfig,
   analytics?: AnalyticsHelper,
 ): void {
-  const compliant = isCompliant(config);
   defineTool<PerformanceParams, PerformanceResponse>(
     server,
     config,
@@ -87,7 +70,7 @@ export function registerPerformanceTool(
       name: 'browserless_performance',
       description:
         'Run a Lighthouse performance audit on any URL via the Browserless /performance API. ' +
-        'Returns scores and metrics for accessibility, best practices, performance, PWA, and SEO. ' +
+        'Returns scores and metrics for accessibility, best practices, performance, and SEO. ' +
         'Optionally filter by category, emulate a mobile or desktop device, ' +
         'supply a custom Lighthouse config, or supply performance budgets. ' +
         'Returns category scores and available Lighthouse lab metrics inline: ' +
@@ -97,9 +80,7 @@ export function registerPerformanceTool(
         'Saves the full JSON report outside the conversation. ' +
         'Use the local path (stdio) or download URL (HTTP) to inspect only the audits you need. ' +
         'Note: audits can take 30s–120s depending on the site.',
-      parameters: compliant
-        ? (CompliantPerformanceParamsSchema as z.ZodType<PerformanceParams>)
-        : PerformanceParamsSchema,
+      parameters: PerformanceParamsSchema,
       annotations: {
         title: 'Browserless Lighthouse Performance Audit',
         readOnlyHint: true,
@@ -107,16 +88,9 @@ export function registerPerformanceTool(
         openWorldHint: true,
       },
       validateUrl: (p) => assertHttpScheme(p.url),
-      profileNotFoundMessage: (profile) =>
-        `Profile "${profile}" was not found for the configured API ` +
-        `token. Create the profile with Browserless.saveProfile in a ` +
-        `live session first, or omit the profile parameter to audit ` +
-        `the page anonymously.`,
       run: async ({ client, params, log }) => {
-        if (compliant && params.profile !== undefined) {
-          throw new UserError(
-            'Authentication profiles are not available on this endpoint.',
-          );
+        if ('profile' in params) {
+          throw new UserError('Authentication profiles are not supported.');
         }
         const response = await client.performance({
           url: params.url,
@@ -125,7 +99,6 @@ export function registerPerformanceTool(
           config: params.config,
           budgets: params.budgets,
           timeout: params.timeout,
-          profile: params.profile,
         });
         log.debug(
           `Performance response: type=${response.type}, ` +
@@ -138,7 +111,6 @@ export function registerPerformanceTool(
         categories: (params.categories ?? []).join(','),
         device: params.device ?? '',
         custom_config: !!params.config,
-        profile_used: !!params.profile,
       }),
       format: async (response, params, { token, sessionId }) => {
         const blocks: Content[] = [];
@@ -217,11 +189,10 @@ export function registerPerformanceTool(
           type: 'text' as const,
           text:
             'Full Lighthouse report saved outside the conversation:\n' +
-            describeReadyDownload(record, {
-              transport: config.transport,
-              mcpBaseUrl: config.mcpBaseUrl,
-              token,
-            }) +
+            (config.transport === 'stdio'
+              ? `${record.path} (${record.mimeType}, ${record.size} bytes)`
+              : `${record.filename} (${record.mimeType}, ${record.size} bytes)\n` +
+                `    save it: curl -fsS "${config.mcpBaseUrl.replace(/\/+$/, '')}/download/${record.id}?token=${encodeURIComponent(token)}" -o "${record.filename}" (single use)`) +
             '\nFiles expire after 15 minutes or when the MCP session ends; save a copy if needed. ' +
             'For HTTP, download to disk first using the save command above. ' +
             'Inspect only the fields needed for your task with jq, for example:\n' +

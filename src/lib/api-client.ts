@@ -477,13 +477,15 @@ export function createApiClient(
     },
 
     async runFunction(params: FunctionRequest): Promise<GenericApiResult> {
+      if ('profile' in params) {
+        throw new Error('Authentication profiles are not supported.');
+      }
       const timeout = params.timeout ?? config.requestTimeout;
       return apiFetch<GenericApiResult>(config, {
         path: '/function',
-        query: { timeout, profile: params.profile },
+        query: { timeout },
         body: compact({ code: params.code, context: params.context }),
         timeout,
-        profile: params.profile,
         handleResponse: readGeneric,
       });
     },
@@ -624,6 +626,9 @@ export function createApiClient(
     async performance(
       params: PerformanceRequest,
     ): Promise<PerformanceResponse> {
+      if ('profile' in params) {
+        throw new Error('Authentication profiles are not supported.');
+      }
       const timeout = params.timeout ?? config.requestTimeout;
       const body: Record<string, unknown> = { url: params.url };
       if (params.config || params.device || params.categories) {
@@ -640,10 +645,9 @@ export function createApiClient(
       if (params.budgets) body.budgets = params.budgets;
       return apiFetch<PerformanceResponse>(config, {
         path: '/performance',
-        query: { timeout, profile: params.profile },
+        query: { timeout },
         body,
         timeout,
-        profile: params.profile,
       });
     },
 

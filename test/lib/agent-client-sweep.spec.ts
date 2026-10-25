@@ -190,17 +190,17 @@ describe('agent-client session sweep', () => {
     }
   });
 
-  it('boots the sweep for both transports without closing browsers on disconnect', () => {
+  it('does not boot unused agent session machinery in the self-hosted entrypoint', () => {
     const source = readFileSync('src/index.ts', 'utf8');
     const disconnect = source.slice(
       source.indexOf("server.on('disconnect'"),
       source.indexOf("if (config.transport === 'httpStream')"),
     );
-    expect(disconnect).to.include('dropMcpSession');
+    expect(source).not.to.match(/agent-client|dropMcpSession|startSweepTimer/);
+    expect(disconnect).to.include('clearSession');
     expect(disconnect).not.to.match(
       /closeSession|closeAllSessions|properClose/,
     );
-    expect(disconnect).to.include('startSweepTimer();');
   });
 
   it('starts one unrefed timer and reaps without incoming traffic while activity refreshes the idle clock', async () => {
