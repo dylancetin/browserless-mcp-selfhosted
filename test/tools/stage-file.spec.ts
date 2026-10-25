@@ -36,7 +36,7 @@ describe('browserless_stage_file', () => {
 
   afterEach(() => sinon.restore());
 
-  it('registers only on full HTTP, never compliant or stdio', () => {
+  it('is never registered by the self-hosted entrypoint', () => {
     for (const transport of ['httpStream', 'stdio'] as const) {
       for (const complianceMode of [false, true]) {
         const server = new FastMCP({ name: 'test', version: '1.0.0' });
@@ -44,7 +44,7 @@ describe('browserless_stage_file', () => {
         registerSurface(server, { ...config, transport, complianceMode });
         expect(
           add.args.some(([tool]) => tool.name === 'browserless_stage_file'),
-        ).to.equal(transport === 'httpStream' && !complianceMode);
+        ).to.equal(false);
       }
     }
   });
@@ -115,9 +115,9 @@ describe('browserless_stage_file', () => {
     });
   }
 
-  it('publishes native metadata and exact required pair over real HTTP; rejects missing fields and disabled downloads', async () => {
+  it('retains standalone upstream metadata and validation without registering it in the fork', async () => {
     const server = new FastMCP({ name: 'test', version: '1.0.0' });
-    registerSurface(server, config);
+    registerStageFileTool(server, config);
     const client = new Client({ name: 'test', version: '1.0.0' });
     const port = await freePort();
     try {

@@ -4,15 +4,11 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FastMCP, OAuthProvider } from 'fastmcp';
 import type { OAuthProxy } from 'fastmcp/auth';
-import { getConfig, classifyComplianceInput } from './config.js';
+import { getConfig } from './config.js';
 import type { BrowserlessSession } from './@types/types.js';
 import { registerSurface } from './tools/register.js';
-import { serverInstructions } from './skills/system-prompt.js';
-import { registerUploadRoute } from './resources/upload-route.js';
 import { registerDownloadRoute } from './resources/download-route.js';
-import { registerCloseRoute } from './resources/close-route.js';
 import { clearSession } from './lib/download-store.js';
-import { dropMcpSession, startSweepTimer } from './lib/agent-client.js';
 import {
   touchSession,
   forgetSession,
@@ -146,11 +142,8 @@ const hybridAuthenticate =
     : undefined;
 
 const server = new FastMCP<BrowserlessSession>({
-  name: 'browserless-mcp',
+  name: 'browserless-mcp-selfhosted',
   version: pkg.version,
-  ...(serverInstructions(config.complianceMode)
-    ? { instructions: serverInstructions(config.complianceMode) }
-    : {}),
   ...(oauthProvider ? { auth: oauthProvider } : {}),
   authenticate: hybridAuthenticate,
 });
@@ -187,25 +180,9 @@ if (
     );
   }
 }
-// Log the active surface (both transports) so it's visible in the boot logs.
-// Fail-closed value lands on compliant; distinguish "unset" (dropped/wrong-scoped
-// on a directory deploy) from opt-out, and warn on an unrecognized value (typo).
-const complianceInput = classifyComplianceInput(
-  process.env.MCP_COMPLIANCE_MODE,
+console.error(
+  '[browserless-mcp] Tools: browserless_function, browserless_performance',
 );
-if (complianceInput === 'unrecognized') {
-  console.warn(
-    `[browserless-mcp] WARNING: MCP_COMPLIANCE_MODE="${process.env.MCP_COMPLIANCE_MODE}" ` +
-      'is not a recognized value; defaulting to the compliant (reduced) surface. ' +
-      'Set "true" for compliant or "false" for the full surface.',
-  );
-}
-const complianceSurface = config.complianceMode
-  ? 'compliant (reduced)'
-  : complianceInput === 'unset'
-    ? 'full (MCP_COMPLIANCE_MODE unset — set it to "true" for the compliant surface)'
-    : 'full (explicit opt-out)';
-console.error(`[browserless-mcp] Tool surface: ${complianceSurface}`);
 
 let warnedAboutServerIdentity = false;
 server.on('connect', (event) => {
@@ -251,23 +228,13 @@ if (amplitudeAnalytics || telemetryShutdown) {
 
 server.on('disconnect', (event) => {
   const id = event.session.sessionId ?? 'stdio';
-  // Remote clients replace MCP transports between turns and after a 401.
-  // Do not close agent browsers here: their handles survive transport churn.
-  // Drop any files staged/captured for this session (TTL is the backstop).
   clearSession(event.session.sessionId);
-  dropMcpSession(event.session.sessionId);
   forgetSession(event.session.sessionId);
-  // Release this torn-down MCP session's keepalive ping. fastmcp removes the
-  // session from its registry on disconnect but never calls close(), so the 5s
-  // ping setInterval — and the session graph it pins — would otherwise live
-  // until the process exits. The transport is already gone, so this
-  // only frees the timer and the MCP server; the agent browser handle is keyed
-  // separately in agent-client and is untouched.
+  // FastMCP removes disconnected sessions without clearing their keepalive timer.
   void Promise.resolve(event.session.close()).catch(() => {});
   console.error(`[browserless-mcp] Client disconnected: ${id}`);
 });
 
-startSweepTimer();
 // Backstop for abandoned httpStream transports that never fire `disconnect`:
 // close MCP sessions idle past the TTL so their ping intervals cannot pile up.
 startSessionReaper(() => server.sessions);
@@ -282,9 +249,6 @@ if (config.transport === 'httpStream') {
       stateless: false,
     },
   });
-  // Out-of-band file staging for uploads (the LLM curls a file here and gets a
-  // handle, instead of base64-ing it through the conversation). httpStream only.
-  registerUploadRoute(server, config);
   if (oauthProvider) {
     const limiter = createRegisterRateLimiter({
       redis: redisClient,
@@ -323,7 +287,6 @@ if (config.transport === 'httpStream') {
   // instead of pulling bytes through the conversation). httpStream only.
   registerDownloadRoute(server, config);
 
-  registerCloseRoute(server, config);
   console.error(
     `[browserless-mcp] HTTP Streamable server listening on port ${config.port}`,
   );

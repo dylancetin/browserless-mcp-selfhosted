@@ -1,87 +1,17 @@
-# Installing Browserless MCP — agent guide
+# Install this self-hosted fork for an MCP client
 
-Read this if you're an AI agent (Cline, Claude Desktop, etc.) installing Browserless on a user's machine. Humans should read `README.md`.
+1. Confirm Node.js is at least version 24 and npm is at least version 11.10.
+2. Clone `https://github.com/dylancetin/browserless-mcp-selfhosted.git`.
+3. Run `npm ci` and `npm run build` in the checkout.
+4. Configure stdio with command `node` and the absolute path to `<checkout>/build/src/index.js` as its argument.
+5. Supply `BROWSERLESS_TOKEN` through the client's private environment configuration. Never request or echo the token in conversation.
+6. Set `BROWSERLESS_API_URL` to the user's Browserless base URL if it differs from `http://localhost:3000`. Keep credentials, queries, and fragments out of that URL.
+7. Check that MCP lists exactly `browserless_function` and `browserless_performance`, no prompts, and only the `browserless://status` resource.
 
-## What this server does
+For HTTP, follow [installation](install.md#use-streamable-http). Use a plain Browserless token, not cloud OAuth. Set `MCP_BASE_URL` when clients cannot reach the default `http://localhost:<PORT>` download base.
 
-Browserless is a hosted MCP server for browser automation. Ten tools: smart scraping, web/news/image search, sitemap mapping, full-site crawling, Lighthouse audits, custom Puppeteer execution, file downloads, native exports, and a persistent agentic-browsing loop with ref-based snapshots, captcha solving, and residential proxies.
+Use `browserless_function` with `{code, context?, timeout?}`. Supply browser-context ESM, for example `export default async ({ page, context }) => { await page.goto(context.url); return await page.title(); }`. Return screenshot or PDF bytes directly. Do not wrap results in `{data, type}`. Node.js globals are unavailable.
 
-## Install path: hosted (recommended)
+Use `browserless_performance` with `{url, categories?, device?, config?, budgets?, timeout?}`. Accepted categories are `accessibility`, `best-practices`, `performance`, and `seo`. Both tools reject `profile`. No agent, cloud account, profile, search, crawl, or smart-scraper tool is available.
 
-Use the hosted server at `https://mcp.browserless.io/mcp`. No local install needed.
-
-1. **Ask the user for their Browserless API token.** Get one at `https://browserless.io/account/`.
-2. **Add the server to the MCP client config** (replace `<BROWSERLESS_TOKEN>` with the user's actual token):
-
-```json
-{
-  "mcpServers": {
-    "Browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=<BROWSERLESS_TOKEN>",
-      "type": "streamableHttp",
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
-
-3. **Reload the MCP client** so it picks up the new server.
-
-> The token is passed via the `?token=` query parameter. `autoApprove: []` keeps all tool calls requiring user confirmation — recommended default. The client may flag a config-shape variant; some MCP clients use `transport` instead of `type` and `streamable-http` instead of `streamableHttp` — adjust if your client rejects the shape above.
-
-## Install path: local stdio (fallback)
-
-If the user needs a local-only / air-gapped install, use the npm package over stdio.
-
-1. **Ensure Node.js >= 18 is installed.**
-2. **Get the user's `BROWSERLESS_TOKEN`** (see above).
-3. **Add to the MCP client config:**
-
-```json
-{
-  "mcpServers": {
-    "Browserless": {
-      "command": "npx",
-      "args": ["browserless-mcp"],
-      "env": {
-        "BROWSERLESS_TOKEN": "<BROWSERLESS_TOKEN>"
-      },
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
-
-To opt in to Amplitude analytics, add `AMPLITUDE_API_KEY` with a real Amplitude project key.
-
-4. **Reload the MCP client.**
-
-## Verify install
-
-Ask the client to call `browserless_smartscraper` on a simple URL:
-
-```
-Scrape https://example.com and return the markdown
-```
-
-A successful response returns markdown of the example page. If you get an auth error, the token is invalid. If you get a connection error, check the transport / URL / network.
-
-## Region override (optional)
-
-The hosted server defaults to SFO. For LON or AMS regions, append a query parameter:
-
-```
-https://mcp.browserless.io/mcp?token=<BROWSERLESS_TOKEN>&browserlessUrl=https://production-lon.browserless.io
-```
-
-Or send the header `x-browserless-api-url: https://production-lon.browserless.io` if the client supports custom headers.
-
-## Token safety
-
-`BROWSERLESS_TOKEN` is a billing-bound credential.
-
-- Never log, print, or commit the token to a public repo.
-- The `?token=...` query parameter is encrypted in transit (HTTPS), but URLs can leak via referer headers, browser history, and server logs. For maximum hygiene, prefer the stdio path (env var) or use the Bearer header form if your MCP client supports custom headers: `Authorization: Bearer <BROWSERLESS_TOKEN>`.
-- Rotate immediately at `https://browserless.io/account/` if the token has been exposed.
+Do not substitute the upstream npm package or hosted MCP URL. This fork has no npm publication or official MCP registry entry. Keep optional upstream cloud service settings unset. Run `npm run verify:selfhosted` against the user's runtime to verify compatibility. See [compatibility](docs/self-hosted-compatibility.md) for limits and version evidence.

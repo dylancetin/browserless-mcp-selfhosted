@@ -572,7 +572,6 @@ export interface FunctionRequest {
   code: string;
   context?: Record<string, unknown>;
   timeout?: number;
-  profile?: string;
 }
 
 export interface DownloadRequest {
@@ -627,7 +626,6 @@ export interface PerformanceRequest {
   config?: Record<string, unknown>;
   budgets?: Array<Record<string, unknown>>;
   timeout?: number;
-  profile?: string;
 }
 
 export interface CrawlRequest {

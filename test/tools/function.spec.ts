@@ -319,61 +319,7 @@ describe('browserless_function tool', () => {
     expect(url).to.not.include('profile=');
   });
 
-  it('forwards profile as a query parameter to /function', async () => {
-    fetchStub.resolves(
-      new Response('{}', {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-
-    const server = new FastMCP({ name: 'test', version: '0.1.0' });
-    const execute = getToolExecute(server);
-
-    await execute(
-      {
-        code: 'export default async () => ({})',
-        profile: 'my-login',
-      },
-      mockContext,
-    );
-
-    expect(fetchStub.calledOnce).to.be.true;
-    const [url] = fetchStub.firstCall.args;
-    expect(url).to.include('profile=my-login');
-  });
-
-  it('URL-encodes the profile name', async () => {
-    fetchStub.resolves(
-      new Response('{}', {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-
-    const server = new FastMCP({ name: 'test', version: '0.1.0' });
-    const execute = getToolExecute(server);
-
-    await execute(
-      {
-        code: 'export default async () => ({})',
-        profile: 'profile with spaces',
-      },
-      mockContext,
-    );
-
-    const [url] = fetchStub.firstCall.args;
-    expect(url).to.include('profile=profile+with+spaces');
-  });
-
-  it('throws UserError when the profile does not exist', async () => {
-    fetchStub.resolves(
-      new Response(
-        JSON.stringify({ error: 'Profile "missing" was not found' }),
-        { status: 404, headers: { 'Content-Type': 'application/json' } },
-      ),
-    );
-
+  it('rejects profile before fetching even when schema validation is bypassed', async () => {
     const server = new FastMCP({ name: 'test', version: '0.1.0' });
     const execute = getToolExecute(server);
 
@@ -388,9 +334,9 @@ describe('browserless_function tool', () => {
       expect.fail('expected UserError');
     } catch (err) {
       expect(err).to.be.instanceOf(UserError);
-      expect((err as Error).message).to.include('Profile "missing"');
-      expect((err as Error).message).to.include('Browserless.saveProfile');
+      expect((err as Error).message).to.include('profiles are not supported');
     }
+    expect(fetchStub.called).to.be.false;
   });
 });
 
@@ -470,13 +416,13 @@ describe('formatFunctionContent', () => {
     ).to.throw(UserError, /exceeding the .* limit/);
   });
 
-  it('error message points to image/audio types as the fix', () => {
+  it('error message explains raw binary returns', () => {
     const huge = 'a'.repeat(MAX_TEXT_RESPONSE_CHARS + 1);
     try {
       formatFunctionContent(makeResponse({ data: huge, size: huge.length }));
       expect.fail('should have thrown');
     } catch (err) {
-      expect((err as Error).message).to.match(/image\/jpeg|image\/png/);
+      expect((err as Error).message).to.include('raw bytes');
       expect((err as Error).message).to.include('application/pdf');
     }
   });
@@ -493,5 +439,17 @@ describe('formatFunctionContent', () => {
     expect(main.text).to.equal('{"books":[]}');
     const meta = content[1] as Extract<Content, { type: 'text' }>;
     expect(meta.text).to.include('Content-Type: application/json');
+  });
+
+  it('preserves literal data and type fields in JSON results', () => {
+    const data = JSON.stringify({ data: 'literal', type: 'image/png' });
+    const content = formatFunctionContent(
+      makeResponse({
+        data,
+        contentType: 'application/json',
+      }),
+    );
+    expect(content[0]).to.deep.equal({ type: 'text', text: data });
+    expect(content.every((block) => block.type === 'text')).to.be.true;
   });
 });

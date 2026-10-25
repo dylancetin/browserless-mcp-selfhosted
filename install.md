@@ -1,179 +1,45 @@
-# Browserless MCP — Agent Installation Guide
+# Connect a self-hosted Browserless instance
 
-This file is intended to be read by AI agents performing automated setup of the Browserless MCP server into an MCP client. For human-readable documentation, see [README.md](README.md).
+## Build the fork
 
-**Server URL:** `https://mcp.browserless.io/mcp`
-**Auth:** Bearer token via `Authorization: Bearer <token>` header (preferred), or `?token=<token>` query parameter (fallback — token may appear in server logs).
-**Token:** Obtain from [browserless.io](https://browserless.io). Ask the user for their API token before writing any config.
-**OAuth:** Claude Desktop and Cursor also support OAuth — connect without a token and the client will prompt sign-in via the browser.
+Use Node.js 24 or later and npm 11.10 or later.
 
----
-
-## Claude Desktop
-
-Config file location: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
-
-Preferred (Bearer header):
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp",
-      "headers": {
-        "Authorization": "Bearer <BROWSERLESS_TOKEN>"
-      }
-    }
-  }
-}
+```sh
+git clone https://github.com/dylancetin/browserless-mcp-selfhosted.git
+cd browserless-mcp-selfhosted
+npm ci
+npm run build
 ```
 
-Fallback (query parameter, token may appear in logs):
+Start Browserless separately. Set `BROWSERLESS_TOKEN` to its token through your shell's secret mechanism or your MCP client's environment. Set `BROWSERLESS_API_URL` if Browserless is not at `http://localhost:3000`. Do not include the token in that URL.
 
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=<BROWSERLESS_TOKEN>"
-    }
-  }
-}
+## Use stdio
+
+Point your MCP client at `node <checkout>/build/src/index.js`. Use an absolute checkout path in your client configuration. Pass `BROWSERLESS_TOKEN` and, if needed, `BROWSERLESS_API_URL` in the server environment. See the [client configuration example](README.md#build-and-connect).
+
+Expect exactly `browserless_function` and `browserless_performance` in the client's tool list. Do not install `@browserless.io/mcp` to run this fork. There is no published npm package for this setup.
+
+## Use Streamable HTTP
+
+With the same Browserless environment, run the server in the foreground.
+
+```sh
+PORT=8080 npm run start:http
 ```
 
-After writing the file, tell the user to restart Claude Desktop for the change to take effect.
+Connect the MCP client to `http://localhost:8080/mcp`. Supply `Authorization: Bearer <local-browserless-token>` with every request. The server listens on all network interfaces. Restrict access with your firewall. Use TLS through a trusted reverse proxy for access outside a trusted local network.
 
----
+`MCP_BASE_URL` defaults to `http://localhost:<PORT>`. To retrieve Lighthouse downloads from another machine, set it to the MCP server's client-reachable HTTP or HTTPS base URL before starting. This URL identifies the MCP server, not Browserless. Download URLs contain a credential, so do not share them or save them in logs. Downloads work once and expire after 15 minutes or when the MCP session ends.
 
-## Claude Code
+Both transports expose the same two tools for any `MCP_COMPLIANCE_MODE` value. Upload staging and agent session-close routes are not registered. The download route remains available for Lighthouse reports. The status resource uses the MCP process's `BROWSERLESS_TOKEN`, not an HTTP client's token.
 
-Preferred: add a project server to `.mcp.json` in the project root:
+## Check the connection
 
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "type": "http",
-      "url": "https://mcp.browserless.io/mcp",
-      "headers": {
-        "Authorization": "Bearer ${BROWSERLESS_TOKEN}"
-      }
-    }
-  }
-}
+```sh
+npm run build
+npm run verify:selfhosted
 ```
 
-Claude Code expands `${BROWSERLESS_TOKEN}` from the user's shell. Have the user
-set it there, not paste it into chat. The Browserless CLI reads the same variable,
-so local Chrome sync needs no second token. Never print or echo the value.
+If Browserless runs remotely or in a container, set `BROWSERLESS_VERIFY_FIXTURE_HOST` to this machine's reachable hostname or address. Ensure Browserless can reach the temporary fixture port. The script closes its fixture and child MCP processes on success or failure. It saves readable Lighthouse reports outside the checkout unless you set `BROWSERLESS_VERIFY_OUTPUT_DIR`.
 
-Alternatively, the user can run this locally (the shell expands the header):
-
-```bash
-claude mcp add --transport http browserless https://mcp.browserless.io/mcp --header "Authorization: Bearer ${BROWSERLESS_TOKEN}"
-```
-
-This defaults to local scope; add `--scope user` for all projects. Local and user
-servers are stored in `~/.claude.json`, not Claude Code settings files.
-
-## Profile import (CLI)
-
-When running on the user's own machine with Node 24+, load the `profile-import`
-skill for the complete recipe. Hosted agents without local browser access should
-use `auth-profile` instead. Check `browserless_profiles` first to reuse a saved login.
-
-```bash
-npm install -g @browserless.io/cli
-browserless profile terms
-```
-
-Show the disclaimer output verbatim and the proposed domain list, then wait for
-an explicit yes before passing `--accept-terms`. With `BROWSERLESS_TOKEN` already
-in the shell, upload only the consented site (and its identity-provider domains,
-using additional `--only-domain` flags if needed):
-
-```bash
-browserless profile upload --browser chrome --profile Default --name <site> --only-domain <site> --accept-terms --json
-```
-
-Use the uploaded profile by passing `profile: "<site>"` to the MCP tools. Preserve
-the same consented domain filters on retries and refreshes; follow the skill for
-Keychain prompts, bounded recovery and authentication reporting.
-
----
-
-## Cursor
-
-Config file location: `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project-level).
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=<BROWSERLESS_TOKEN>"
-    }
-  }
-}
-```
-
-After writing, reload MCP servers in Cursor (open the MCP panel and click Refresh, or restart Cursor).
-
----
-
-## VS Code
-
-Config file location: `~/.vscode/settings.json` (user-level) or `.vscode/settings.json` (workspace-level).
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "browserless": {
-        "type": "http",
-        "url": "https://mcp.browserless.io/mcp",
-        "headers": {
-          "Authorization": "Bearer <BROWSERLESS_TOKEN>"
-        }
-      }
-    }
-  }
-}
-```
-
-> If using VS Code with GitHub Copilot, the key may be `github.copilot.mcp` instead of `mcp` depending on your VS Code version and extension setup.
-
-After writing, run the **MCP: List Servers** command in VS Code to confirm the server appears and connect.
-
----
-
-## Windsurf
-
-Config file location: `~/.codeium/windsurf/mcp_config.json`.
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "serverUrl": "https://mcp.browserless.io/mcp?token=<BROWSERLESS_TOKEN>"
-    }
-  }
-}
-```
-
-> Some versions of Windsurf use `url` instead of `serverUrl` — if the server doesn't appear after refreshing, try the other key.
-
-After writing, open the Windsurf MCP panel and click **Refresh** to connect.
-
----
-
-## Verification
-
-After installing, call the `browserless_smartscraper` tool with:
-
-```json
-{
-  "url": "https://example.com",
-  "format": "markdown"
-}
-```
-
-A successful response returns the page content in markdown. If you get an auth error, the token is wrong or was not passed correctly. If you get a connection error, check the URL and network.
+Keep upstream OAuth, Redis, SQS, Amplitude, and OTLP settings unset for this local setup. Those opt-in modules remain in the source but are not required here. Do not copy hosted connector configuration from upstream integrations.

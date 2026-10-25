@@ -3688,9 +3688,9 @@ describe('browserless_agent _prompt capture', () => {
     }
   });
 
-  it('injects _prompt into the schema and logs it redacted', async () => {
+  it('does not advertise _prompt and redacts legacy direct-call analytics', async () => {
     const { added, execute, fire } = registerWithAnalytics(mockConfig);
-    expect((added.parameters as any).shape).to.have.property('_prompt');
+    expect((added.parameters as any).shape).to.not.have.property('_prompt');
 
     await execute(
       { method: 'close', _prompt: 'log in with password: hunter2secret' },

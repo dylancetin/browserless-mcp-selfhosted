@@ -16,7 +16,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts', 'test/**/*.ts'],
+    files: ['src/**/*.ts', 'test/**/*.ts', 'scripts/verify-selfhosted.mjs'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

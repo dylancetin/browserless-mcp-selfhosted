@@ -17,10 +17,10 @@ export function registerStatusResource(
           text: JSON.stringify(
             {
               apiUrl: config.browserlessApiUrl,
-              surface: config.complianceMode ? 'compliant' : 'full',
+              surface: 'self-hosted',
               ok: false,
               message:
-                'No BROWSERLESS_TOKEN configured. For HTTP: pass Authorization header.',
+                'Set BROWSERLESS_TOKEN on the MCP server to read runtime status.',
               timestamp: new Date().toISOString(),
             },
             null,
@@ -38,7 +38,7 @@ export function registerStatusResource(
             // the status payload ever grows an overlapping key.
             ...status,
             apiUrl: config.browserlessApiUrl,
-            surface: config.complianceMode ? 'compliant' : 'full',
+            surface: 'self-hosted',
             timestamp: new Date().toISOString(),
           },
           null,

@@ -3,7 +3,7 @@ import type { McpConfig } from './@types/types.js';
 import { downloadsDir } from './lib/download-store.js';
 import { delimiter, resolve } from 'node:path';
 
-export const DEFAULT_API_URL = 'https://production-sfo.browserless.io';
+export const DEFAULT_API_URL = 'http://localhost:3000';
 export const DEFAULT_API_SERVER_URL = 'https://api.browserless.io';
 
 // Baseline allow-list of redirect URIs for MCP clients that legitimately DCR
@@ -30,8 +30,7 @@ const DEFAULT_ALLOWED_REDIRECT_URI_PATTERNS = [
   'https://eu1.make.celonis.com/oauth/cb/mcp', // Make.com Celonis-hosted (enterprise) — EU region
 ];
 
-// Fail closed: any SET value except an explicit opt-out (false/0/no/off) enables
-// the compliant surface, so a fumbled flag can't leak the full one to a directory.
+// Compatibility parsing for upstream helpers, not the self-hosted tool registry.
 const COMPLIANCE_OPT_OUT = new Set(['false', '0', 'no', 'off']);
 const COMPLIANCE_OPT_IN = new Set(['true', '1', 'yes', 'on']);
 function parseComplianceMode(raw: string | undefined): boolean {
@@ -39,8 +38,6 @@ function parseComplianceMode(raw: string | undefined): boolean {
   return !COMPLIANCE_OPT_OUT.has(raw.trim().toLowerCase());
 }
 
-// Classify the raw flag for boot logging: `unrecognized` still resolves to
-// compliant (fail-closed) but is warned, so a typo isn't read as intentional opt-in.
 export function classifyComplianceInput(
   raw: string | undefined,
 ): 'unset' | 'opt-out' | 'opt-in' | 'unrecognized' {
@@ -52,6 +49,21 @@ export function classifyComplianceInput(
 }
 
 export function getConfig(): McpConfig & { uploadDirs: string[] } {
+  const port = parseInt(process.env.PORT ?? '8080', 10);
+  const browserlessApiUrl = new URL(
+    process.env.BROWSERLESS_API_URL ?? DEFAULT_API_URL,
+  );
+  if (
+    !['http:', 'https:'].includes(browserlessApiUrl.protocol) ||
+    browserlessApiUrl.username ||
+    browserlessApiUrl.password ||
+    browserlessApiUrl.href.includes('?') ||
+    browserlessApiUrl.href.includes('#')
+  ) {
+    throw new Error(
+      'BROWSERLESS_API_URL must be an HTTP(S) URL without credentials, query, or fragment',
+    );
+  }
   const oauthRegisterRateLimitPerHour = Number(
     process.env.OAUTH_REGISTER_RATE_LIMIT_PER_HOUR ?? '300',
   );
@@ -65,7 +77,7 @@ export function getConfig(): McpConfig & { uploadDirs: string[] } {
   }
   return {
     browserlessToken: process.env.BROWSERLESS_TOKEN,
-    browserlessApiUrl: process.env.BROWSERLESS_API_URL ?? DEFAULT_API_URL,
+    browserlessApiUrl: browserlessApiUrl.href.replace(/\/+$/, ''),
     allowedApiUrlHosts: parseCsv(process.env.MCP_ALLOWED_API_URL_HOSTS),
     apiServerUrl: process.env.BROWSERLESS_API_SERVER ?? DEFAULT_API_SERVER_URL,
     transport: (process.env.TRANSPORT as 'stdio' | 'httpStream') ?? 'stdio',
@@ -75,15 +87,13 @@ export function getConfig(): McpConfig & { uploadDirs: string[] } {
         .split(delimiter)
         .filter(Boolean),
     ].map((dir) => resolve(dir)),
-    port: parseInt(process.env.PORT ?? '8080', 10),
+    port,
     requestTimeout: parseInt(process.env.BROWSERLESS_TIMEOUT ?? '30000', 10),
     maxRetries: parseInt(process.env.BROWSERLESS_MAX_RETRIES ?? '3', 10),
     cacheTtlMs: parseInt(process.env.BROWSERLESS_CACHE_TTL ?? '60000', 10),
     analyticsEnabled: process.env.ANALYTICS_ENABLED === 'true',
     amplitudeApiKey: process.env.AMPLITUDE_API_KEY,
-    // Per-process toggle for the compliant surface used by the OpenAI/Anthropic
-    // directory listings: registers fewer tools and de-fangs the agent (see
-    // tools/compliance.ts). Fails closed — see parseComplianceMode.
+    // Retained for unregistered upstream helpers. The self-hosted registry ignores it.
     complianceMode: parseComplianceMode(process.env.MCP_COMPLIANCE_MODE),
     sqsQueueUrl: process.env.SQS_QUEUE_URL,
     sqsRegion: process.env.SQS_REGION ?? 'us-west-2',
@@ -94,7 +104,7 @@ export function getConfig(): McpConfig & { uploadDirs: string[] } {
     supabaseOAuthClientId: process.env.SUPABASE_OAUTH_CLIENT_ID ?? '',
     supabaseOAuthClientSecret: process.env.SUPABASE_OAUTH_CLIENT_SECRET ?? '',
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY ?? '',
-    mcpBaseUrl: process.env.MCP_BASE_URL ?? 'https://mcp.browserless.io',
+    mcpBaseUrl: process.env.MCP_BASE_URL ?? `http://localhost:${port}`,
     redisUrl: process.env.REDIS_URL || undefined,
     oauthAllowedRedirectUriPatterns: [
       ...DEFAULT_ALLOWED_REDIRECT_URI_PATTERNS,

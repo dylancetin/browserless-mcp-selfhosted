@@ -3,7 +3,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sinon from 'sinon';
 import { FastMCP } from 'fastmcp';
-import { registerSurface } from '../../src/tools/register.js';
+import { registerAgentTools } from '../../src/tools/agent.js';
+import { registerExportTool } from '../../src/tools/export.js';
+import { registerPerformanceTool } from '../../src/tools/performance.js';
+import { registerAccountTool } from '../../src/tools/account.js';
+import { registerUsageTool } from '../../src/tools/usage.js';
+import { registerSessionsTool } from '../../src/tools/sessions.js';
+import { registerLogsTool } from '../../src/tools/logs.js';
 import {
   visibleSkills,
   detectVisibleSkills,
@@ -51,103 +57,38 @@ type CapturedTool = {
   parameters: { safeParse: (v: unknown) => { success: boolean; data?: any } };
 };
 
-// Drive the REAL registration seam (src/tools/register.ts, which index.ts also
-// calls) so this guard catches drift — e.g. a new circumvention tool registered
-// unconditionally would change the compliant tool set and fail here.
+function registerUpstreamHelpers(server: FastMCP, config: McpConfig) {
+  registerAgentTools(server, config);
+  registerExportTool(server, config);
+  registerPerformanceTool(server, config);
+  registerAccountTool(server, config);
+  registerUsageTool(server, config);
+  registerSessionsTool(server, config);
+  registerLogsTool(server, config);
+}
+
 function captureTools(complianceMode: boolean) {
   const server = new FastMCP({ name: 'test', version: '0.1.0' });
   const toolSpy = sinon.spy(server, 'addTool');
-  const promptSpy = sinon.spy(server, 'addPrompt');
-  const resourceSpy = sinon.spy(server, 'addResource');
   const config: McpConfig = { ...baseConfig, complianceMode };
 
-  registerSurface(server, config);
+  registerUpstreamHelpers(server, config);
 
   const calls = toolSpy
     .getCalls()
     .map((c) => c.args[0] as unknown as CapturedTool);
   return {
-    names: calls.map((t) => t.name).sort(),
     byName: new Map(calls.map((t) => [t.name, t])),
-    promptNames: promptSpy
-      .getCalls()
-      .map((c) => (c.args[0] as { name: string }).name)
-      .sort(),
-    resourceUris: resourceSpy
-      .getCalls()
-      .map((c) => (c.args[0] as { uri: string }).uri)
-      .sort(),
   };
 }
 
 const VALID_GOTO = { method: 'goto', params: { url: 'https://example.com' } };
 
-describe('compliance mode — compliant tool surface', () => {
+describe('unregistered upstream compliance helpers', () => {
   afterEach(() => sinon.restore());
 
-  it('registers exactly the 8 compliant tools (no search/smartscraper/function/map/crawl)', () => {
-    const { names } = captureTools(true);
-    expect(names).to.deep.equal([
-      'browserless_account',
-      'browserless_agent',
-      'browserless_export',
-      'browserless_logs',
-      'browserless_performance',
-      'browserless_sessions',
-      'browserless_skill',
-      'browserless_usage',
-    ]);
-  });
-
-  it('full mode registers exactly the 17 tools (regression guard)', () => {
-    const { names } = captureTools(false);
-    expect(names).to.deep.equal([
-      'browserless_account',
-      'browserless_agent',
-      'browserless_crawl',
-      'browserless_export',
-      'browserless_function',
-      'browserless_link_checkout',
-      'browserless_link_connect',
-      'browserless_live_url',
-      'browserless_logs',
-      'browserless_map',
-      'browserless_performance',
-      'browserless_profiles',
-      'browserless_search',
-      'browserless_sessions',
-      'browserless_skill',
-      'browserless_smartscraper',
-      'browserless_usage',
-    ]);
-  });
-
-  it('browserless_profiles is full-only (excluded from the compliant surface)', () => {
-    expect(captureTools(true).byName.has('browserless_profiles')).to.be.false;
-    expect(captureTools(false).byName.has('browserless_profiles')).to.be.true;
-  });
-
-  it('Stripe Link tools are full-only', () => {
-    const compliant = captureTools(true).byName;
-    const full = captureTools(false).byName;
-    expect(compliant.has('browserless_link_connect')).to.be.false;
-    expect(compliant.has('browserless_link_checkout')).to.be.false;
-    expect(full.has('browserless_link_connect')).to.be.true;
-    expect(full.has('browserless_link_checkout')).to.be.true;
-  });
-
-  it('browserless_search is full-only (excluded from the compliant surface)', () => {
-    expect(captureTools(true).byName.has('browserless_search')).to.be.false;
-    expect(captureTools(false).byName.has('browserless_search')).to.be.true;
-  });
-
-  // #179 broke compliance by re-adding direct register*() calls in index.ts,
-  // bypassing the registerSurface gate (the register.ts-driven tests above can't
-  // see that). Lock index.ts to registerSurface as the sole registration path.
   it('index.ts registers the surface only via registerSurface (no direct tool calls)', () => {
     const src = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8');
-    // A register*Tool/Resource/Prompt call in index.ts bypasses the registerSurface
-    // gate (how #179 regressed); generic match catches any new tool, not a fixed list.
     const directCalls = [
       ...src.matchAll(/\bregister\w+(?:Tools?|Resource|Prompt)\s*\(/g),
     ].map((m) => m[0]);
@@ -158,30 +99,6 @@ describe('compliance mode — compliant tool surface', () => {
     expect(src, 'index.ts must call registerSurface').to.include(
       'registerSurface(',
     );
-  });
-
-  describe('non-tool surface (prompts + resources)', () => {
-    it('compliant mode omits the smartscraper-centric prompts + api-docs resource', () => {
-      const { promptNames, resourceUris } = captureTools(true);
-      expect(promptNames, 'no scrape prompts').to.not.include.members([
-        'scrape-url',
-        'extract-content',
-      ]);
-      expect(resourceUris, 'no api-docs').to.not.include(
-        'browserless://api-docs',
-      );
-      // status resource stays on both surfaces (it reports the active surface).
-      expect(resourceUris, 'status kept').to.include('browserless://status');
-    });
-
-    it('full mode serves the prompts + api-docs resource', () => {
-      const { promptNames, resourceUris } = captureTools(false);
-      expect(promptNames).to.include.members(['scrape-url', 'extract-content']);
-      expect(resourceUris).to.include.members([
-        'browserless://api-docs',
-        'browserless://status',
-      ]);
-    });
   });
 
   describe('agent schema', () => {
@@ -465,13 +382,6 @@ describe('compliance mode — compliant tool surface', () => {
   });
 
   describe('descriptions and dropped params', () => {
-    it('smartscraper is absent in compliant mode, present in full', () => {
-      expect(captureTools(true).byName.has('browserless_smartscraper')).to.be
-        .false;
-      expect(captureTools(false).byName.has('browserless_smartscraper')).to.be
-        .true;
-    });
-
     it('export rejects includeResources (strict); full keeps it', () => {
       const conn = captureTools(true).byName.get('browserless_export')!;
       const full = captureTools(false).byName.get('browserless_export')!;
@@ -498,7 +408,7 @@ describe('compliance mode — compliant tool surface', () => {
         .be.true;
     });
 
-    it('performance rejects profile / auth-session hydration (strict); full keeps it', () => {
+    it('performance rejects profile regardless of compliance mode', () => {
       const conn = captureTools(true).byName.get('browserless_performance')!;
       const full = captureTools(false).byName.get('browserless_performance')!;
       const withProfile = { url: 'https://example.com', profile: 'my-profile' };
@@ -506,8 +416,7 @@ describe('compliance mode — compliant tool surface', () => {
         conn.parameters.safeParse(withProfile).success,
         'compliant rejects',
       ).to.be.false;
-      expect(full.parameters.safeParse(withProfile).success, 'full keeps it').to
-        .be.true;
+      expect(full.parameters.safeParse(withProfile).success).to.be.false;
     });
 
     it('serves the de-fanged compliant descriptions (what a directory reviewer reads)', () => {
@@ -542,7 +451,7 @@ describe('compliance mode — compliant tool surface', () => {
     const compliantAgentExecute = () => {
       const server = new FastMCP({ name: 'test', version: '0.1.0' });
       const spy = sinon.spy(server, 'addTool');
-      registerSurface(server, { ...baseConfig, complianceMode: true });
+      registerUpstreamHelpers(server, { ...baseConfig, complianceMode: true });
       const agent = spy
         .getCalls()
         .find((c) => c.args[0].name === 'browserless_agent')!.args[0] as {
@@ -622,7 +531,7 @@ describe('compliance mode — compliant tool surface', () => {
     const compliantSkillExecute = () => {
       const server = new FastMCP({ name: 'test', version: '0.1.0' });
       const spy = sinon.spy(server, 'addTool');
-      registerSurface(server, { ...baseConfig, complianceMode: true });
+      registerUpstreamHelpers(server, { ...baseConfig, complianceMode: true });
       const skill = spy
         .getCalls()
         .find((c) => c.args[0].name === 'browserless_skill')!.args[0] as {
@@ -644,7 +553,7 @@ describe('compliance mode — compliant tool surface', () => {
     const compliantExecute = (toolName: string) => {
       const server = new FastMCP({ name: 'test', version: '0.1.0' });
       const spy = sinon.spy(server, 'addTool');
-      registerSurface(server, { ...baseConfig, complianceMode: true });
+      registerUpstreamHelpers(server, { ...baseConfig, complianceMode: true });
       return spy.getCalls().find((c) => c.args[0].name === toolName)!
         .args[0] as {
         execute: (a: unknown, c: unknown) => Promise<unknown>;
@@ -686,7 +595,7 @@ describe('compliance mode — compliant tool surface', () => {
         );
         expect.fail('expected UserError');
       } catch (err) {
-        expect((err as Error).message).to.match(/not available/i);
+        expect((err as Error).message).to.match(/not supported/i);
       }
     });
   });
@@ -786,35 +695,6 @@ describe('compliance mode — compliant tool surface', () => {
           `${name} must not expose profile`,
         ).to.not.include('profile');
       }
-    });
-  });
-
-  describe('status resource reports the active surface', () => {
-    // Load the status resource via its no-token early-return branch (no network),
-    // and assert the machine-readable `surface` attestation a directory/uptime
-    // check reads. Guards an inverted ternary or a dropped field.
-    const loadStatus = async (complianceMode: boolean) => {
-      const server = new FastMCP({ name: 'test', version: '0.1.0' });
-      const spy = sinon.spy(server, 'addResource');
-      registerSurface(server, {
-        ...baseConfig,
-        browserlessToken: undefined,
-        complianceMode,
-      });
-      const res = spy
-        .getCalls()
-        .find((c) => c.args[0].uri === 'browserless://status')!.args[0] as {
-        load: () => Promise<{ text: string }>;
-      };
-      return JSON.parse((await res.load()).text);
-    };
-
-    it('reports surface "compliant" in compliant mode', async () => {
-      expect((await loadStatus(true)).surface).to.equal('compliant');
-    });
-
-    it('reports surface "full" in full mode', async () => {
-      expect((await loadStatus(false)).surface).to.equal('full');
     });
   });
 

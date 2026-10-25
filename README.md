@@ -1,490 +1,85 @@
-# Browserless MCP Server
+# Browserless MCP self-hosted
 
-[![MCP Badge](https://lobehub.com/badge/mcp/browserless-browserless-mcp?style=for-the-badge)](https://lobehub.com/mcp/browserless-browserless-mcp)
+This fork exposes two MCP tools for a self-hosted Browserless instance. It does not require a Browserless cloud account.
 
-MCP (Model Context Protocol) server for [Browserless.io](https://browserless.io) — expose the Browserless smart scraper API to LLM clients like Claude Desktop, Cursor, VS Code, and Windsurf.
+- `browserless_function` runs browser-context ESM with Puppeteer and returns text, JSON, images, or binary attachments.
+- `browserless_performance` runs Lighthouse and saves the full JSON report outside the conversation.
 
-## Quick Start
+Both stdio and Streamable HTTP expose the same tools. `MCP_COMPLIANCE_MODE` does not change them. The only listed resource is `browserless://status`, backed by `GET /active`. There are no registered prompts or agent instructions.
 
-Get an API token from [browserless.io](https://browserless.io) (free tier available), then point your MCP client at the hosted server:
+## Build and connect
 
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=your-token-here"
-    }
-  }
-}
-```
+Use Node.js 24 or later and npm 11.10 or later. Start your self-hosted Browserless instance separately.
 
-No local install — see [Configuration](#configuration) for per-client snippets.
-
-## Tools
-
-| Tool                       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browserless_smartscraper` | Scrape a single webpage and return its content as markdown or HTML. Handles JavaScript-heavy pages and anti-bot measures automatically. For content across multiple pages, use `browserless_crawl`; to list a site's URLs, use `browserless_map`.                                                                                                                                                                                                           |
-| `browserless_search`       | Search the web using Browserless and optionally scrape each result. Supports web, news, and image search with geo-targeting and time filters.                                                                                                                                                                                                                                                                                                               |
-| `browserless_map`          | Discover and map all URLs on a website. Scans via sitemaps and link extraction. Returns URLs with optional titles and descriptions. Useful for site audits and content discovery.                                                                                                                                                                                                                                                                           |
-| `browserless_crawl`        | Crawl a website and scrape every discovered page. Supports depth control, path filtering, sitemap strategies, and configurable scrape options. Returns scraped content and metadata for each page.                                                                                                                                                                                                                                                          |
-| `browserless_performance`  | Run Lighthouse audits on any URL. Returns category scores inline and saves the full JSON report outside the conversation: a local path (stdio) or authenticated single-use download URL (HTTP). Download to disk and inspect only needed fields with `jq`; files expire after 15 minutes or when the MCP session ends. Optionally filter by category, emulate a mobile or desktop device, supply a custom Lighthouse config, or supply performance budgets. |
-| `browserless_function`     | Execute custom Puppeteer JavaScript on the Browserless cloud. The function receives a `page` object and optional `context`; return `{ data, type }` to control the payload and Content-Type.                                                                                                                                                                                                                                                                |
-| `browserless_export`       | Export a webpage via the Browserless `/export` API. Fetches the URL and returns its native content (HTML, PDF, image, etc.) with automatic content-type detection.                                                                                                                                                                                                                                                                                          |
-| `browserless_agent`        | Drive a persistent browser session via a ReAct loop: snapshot the page, plan, batch interactions (click, type, scroll, evaluate, etc.), and re-snapshot. Uses ref-based selectors derived from snapshots, supports multi-tab workflows, screenshots, captcha solving, live URLs, and file upload/download (captured downloads auto-surface as handles; bytes never enter context).                                                                          |
-| `browserless_skill`        | Load an on-demand recipe for a non-trivial page mechanic (shadow DOM, cookie consent, modals, captchas, dynamic content, snapshot misses, screenshots, tabs). Companion to `browserless_agent`.                                                                                                                                                                                                                                                             |
-| `browserless_profiles`     | List the authentication profiles saved for the current token, with cookie and origin counts. Pass a profile's name as `profile` to another tool to reuse its logged-in state.                                                                                                                                                                                                                                                                               |
-| `browserless_account`      | Read the account behind the current token: plan, unit balance, billing period, and API key names. Never returns API token values.                                                                                                                                                                                                                                                                                                                           |
-| `browserless_usage`        | Read request and unit consumption: successes, errors, timeouts, queueing, peak concurrency, captchas, proxy bytes and units. Optionally scoped to specific API keys.                                                                                                                                                                                                                                                                                        |
-| `browserless_sessions`     | Inspect the account's sessions — browsers running now, persistent sessions on dedicated workers, recorded session replays, and 1Password credential integrations. Also downloads a replay as a fully self-contained rrweb player page (`action: "replay"`) that needs no network to render: opened in your browser when the server runs locally, otherwise attached as an inline HTML resource when small enough to send.                                   |
-| `browserless_logs`         | Read Browserless's own record of recent requests: what was attempted, whether it failed, why it stopped, how long it took and what it cost. The tool for diagnosing a run that failed on the Browserless side. Available window is plan-dependent.                                                                                                                                                                                                          |
-
-### Native file staging (disabled by default)
-
-The full HTTP surface advertises `browserless_stage_file` with the native
-`openai/fileParams` file descriptor. It is absent from stdio and the compliant
-surface. **Native downloads are currently disabled:** the production hostname
-allowlist is empty, so every staging request fails before DNS or network access.
-Tool inputs and environment variables cannot enable it.
-
-The implementation accepts `file.download_url` and `file.file_id`, with optional
-`file.mime_type` and `file.file_name`. Once trusted hosts are verified and enabled
-in code, successful staging returns only `{ handle, filename, mimeType, size }`.
-Pass the handle to `browserless_agent`'s `uploadFile`; handles belong to the
-authenticated token, remain reusable for 15 minutes, and are not tied to an MCP
-transport. Stored MIME is inherited unless the upload supplies an override.
-
-Controlled tests do not establish native ChatGPT attachment acceptance. Live
-attachment acceptance and handle resolution across deployed replicas remain
-unverified; the file store is process-local. Existing multipart `/upload` and
-inline-content uploads are unchanged.
-
-## Skills
-
-The server ships with a built-in library of **Skills** — on-demand recipes the agent can load to handle tricky page mechanics. Skills auto-inject into `browserless_agent` responses when their triggers fire (e.g. the agent hits a cookie banner), and can also be loaded manually via the `browserless_skill` tool.
-
-| Skill             | Source                                                         | Purpose                                                                                                                      |
-| ----------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `shadow-dom`      | [src/skills/shadow-dom.md](src/skills/shadow-dom.md)           | Deep selectors and iframe targeting through shadow roots.                                                                    |
-| `cookie-consent`  | [src/skills/cookie-consent.md](src/skills/cookie-consent.md)   | Vendor-specific dismiss recipes (OneTrust, Cookiebot, Didomi, TrustArc, etc.).                                               |
-| `modals`          | [src/skills/modals.md](src/skills/modals.md)                   | Closing dialogs, alertdialogs, and overlay close-button heuristics.                                                          |
-| `captchas`        | [src/skills/captchas.md](src/skills/captchas.md)               | Using the `solve` command, response semantics, and escalation paths (Cloud only).                                            |
-| `profile-import`  | [src/skills/profile-import.md](src/skills/profile-import.md)   | Import the user's local Chrome/Brave/Edge sign-ins as a profile with the Browserless CLI (consent-gated, full surface only). |
-| `dynamic-content` | [src/skills/dynamic-content.md](src/skills/dynamic-content.md) | Choosing the right `wait*` method for async/AJAX/SPA content.                                                                |
-| `snapshot-misses` | [src/skills/snapshot-misses.md](src/skills/snapshot-misses.md) | Handling truncated/empty snapshots and image-rendered content.                                                               |
-| `screenshots`     | [src/skills/screenshots.md](src/skills/screenshots.md)         | When to screenshot vs. snapshot, scope and format choices.                                                                   |
-| `tabs`            | [src/skills/tabs.md](src/skills/tabs.md)                       | Multi-tab workflows and peek-without-switching via `targetId`.                                                               |
-
-Load a skill explicitly:
-
-```jsonc
-{
-  "method": "tools/call",
-  "params": {
-    "name": "browserless_skill",
-    "arguments": { "id": "cookie-consent" },
-  },
-}
-```
-
-### Built-in proxy (`browserless_agent`)
-
-Pass a top-level `proxy` object on `browserless_agent` to route the session through datacenter or residential IPs. Datacenter is cheaper per MB; residential is less likely to be blocked.
-
-```jsonc
-{
-  "method": "tools/call",
-  "params": {
-    "name": "browserless_agent",
-    "arguments": {
-      "method": "goto",
-      "params": { "url": "https://example.com" },
-      "proxy": {
-        "proxy": "residential",
-        "proxyCountry": "us",
-        "proxySticky": true,
-      },
-    },
-  },
-}
-```
-
-| Field                 | Notes                                                                                                                                         |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `proxy`               | `"datacenter"` for lower cost or `"residential"` when targets block datacenter traffic.                                                       |
-| `proxyCountry`        | ISO-2 country code (`"us"`, `"de"`). Auto-normalized to lowercase. Non-letter values are rejected.                                            |
-| `proxyState`          | US state name with whitespace replaced by underscores (`"new_york"`). Paid-plan gated — non-eligible tokens get a 401.                        |
-| `proxyCity`           | City target. Paid/enterprise plan gated — non-eligible tokens get a 401.                                                                      |
-| `proxySticky`         | Stable IP while the underlying WebSocket stays open. Reconnects (idle drop, network blip, browser crash) allocate a new sticky id and new IP. |
-| `proxyLocaleMatch`    | Match `navigator` locale to the proxy IP country.                                                                                             |
-| `proxyPreset`         | Residential-only named preset (e.g. `"px_amazon01"`). Available presets are plan-dependent — ask Browserless support for your list.           |
-| `externalProxyServer` | Bring-your-own upstream, e.g. `http://user:pass@host:port`. Must be `http://` or `https://`.                                                  |
-
-> **Note:** Geo, sticky, and locale options require either a built-in `proxy` tier or `externalProxyServer`; `proxyPreset` requires `proxy: "residential"`. The MCP rejects unsupported combinations instead of letting the API silently ignore them.
-
-The `proxy` object is read once at session creation. To change it, call `close` and start a new session — the agent client keys sessions on the proxy fingerprint, so passing a different config will land on a fresh WebSocket.
-
-### OS persona (`browserless_agent`)
-
-Agent sessions can opt into a coherent OS persona with top-level creation options:
-
-| Field               | Notes                                                                                     |
-| ------------------- | ----------------------------------------------------------------------------------------- |
-| `emulationOs`       | `"windows"`, `"macos"`, `"linux"`, or `"android"`. Enables platform spoofing.             |
-| `emulatedDevice`    | Android device slug; used only with `emulationOs: "android"`.                             |
-| `screen`            | Desktop screen in `WIDTHxHEIGHT` form.                                                    |
-| `deviceScaleFactor` | Desktop device pixel ratio: `1` or `1.25`.                                                |
-| `deviceSlot`        | Non-negative stable desktop-device slot; the server validates the account-specific range. |
-
-Set persona options on the first call before navigation and reuse the returned
-`sessionId` afterward. Persona is fixed for the life of that browser session;
-close it before selecting a different persona.
-
-## Configuration
-
-The server is hosted at `https://mcp.browserless.io/mcp`. Authenticate via headers (preferred) or a `?token=` query parameter.
-
-Installing via an AI agent? See [install.md](install.md) for agent-readable setup instructions.
-
-**Using headers** (recommended for clients that support them):
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp",
-      "headers": {
-        "Authorization": "Bearer your-token-here"
-      }
-    }
-  }
-}
-```
-
-**Using URL query parameters** (for clients like Claude.ai custom connectors that only accept a URL):
-
-```text
-https://mcp.browserless.io/mcp?token=your-token-here
-```
-
-To connect to a specific Browserless regional endpoint, add the `x-browserless-api-url` header or the `browserlessUrl` query parameter:
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp",
-      "headers": {
-        "Authorization": "Bearer your-token-here",
-        "x-browserless-api-url": "https://production-lon.browserless.io"
-      }
-    }
-  }
-}
-```
-
-```text
-https://mcp.browserless.io/mcp?token=your-token-here&browserlessUrl=https://production-lon.browserless.io
-```
-
-When both headers and query parameters are present, headers take precedence.
-
-API URL overrides are limited to `browserless.io`, its subdomains, the configured `BROWSERLESS_API_URL` origin (same scheme, hostname, and port), and hosts listed in `MCP_ALLOWED_API_URL_HOSTS`. Paths are allowed, but credentials, query strings, and fragments (including bare `?` or `#`) are not. Without an override, the operator-configured URL is used unchanged.
-
-### Claude Desktop
-
-Add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=your-token-here"
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to your Cursor MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=your-token-here"
-    }
-  }
-}
-```
-
-### VS Code
-
-Add to your VS Code settings (`settings.json`):
-
-```json
-{
-  "mcp": {
-    "servers": {
-      "browserless": {
-        "url": "https://mcp.browserless.io/mcp",
-        "headers": {
-          "Authorization": "Bearer your-token-here"
-        }
-      }
-    }
-  }
-}
-```
-
-### Windsurf
-
-Add to your Windsurf MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "browserless": {
-      "url": "https://mcp.browserless.io/mcp?token=your-token-here"
-    }
-  }
-}
-```
-
-## Self-Hosting
-
-The server can also be run locally — useful for air-gapped deployments or pointing at a self-hosted Browserless instance. Clone this repo and build the Docker image:
-
-```bash
-docker build -f docker/Dockerfile -t browserless-mcp .
-
-docker run \
-  -e BROWSERLESS_TOKEN=your-token \
-  -e BROWSERLESS_API_URL=https://your-browserless-instance.example.com \
-  -p 8080:8080 \
-  browserless-mcp
-```
-
-Then point your MCP client at `http://localhost:8080/mcp` using the same header/query-parameter auth as above.
-
-### Self-hosted environment variables
-
-| Variable                    | Required | Default                                 | Description                                                                                                                                                                                                                                                               |
-| --------------------------- | -------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BROWSERLESS_TOKEN`         | Yes      | —                                       | Your Browserless API token                                                                                                                                                                                                                                                |
-| `BROWSERLESS_API_URL`       | No       | `https://production-sfo.browserless.io` | API endpoint (for self-hosted Browserless)                                                                                                                                                                                                                                |
-| `MCP_ALLOWED_API_URL_HOSTS` | No       | —                                       | Comma-separated hosts allowed for client-supplied API URL overrides, in addition to Browserless and the configured API origin                                                                                                                                             |
-| `BROWSERLESS_API_SERVER`    | No       | `https://api.browserless.io`            | Account API host — backs `browserless_account`, `_usage`, `_sessions` and `_logs`. A different host from `BROWSERLESS_API_URL`, which is a browser runtime. Trusted: replay downloads fetch the signed link this API returns, so point it only at an endpoint you operate |
-| `TRANSPORT`                 | No       | `stdio`                                 | Transport type: `stdio` or `httpStream`                                                                                                                                                                                                                                   |
-| `PORT`                      | No       | `8080`                                  | HTTP server port (only for `httpStream` transport)                                                                                                                                                                                                                        |
-| `BROWSERLESS_TIMEOUT`       | No       | `30000`                                 | Request timeout in milliseconds                                                                                                                                                                                                                                           |
-| `BROWSERLESS_MAX_RETRIES`   | No       | `3`                                     | Max retry attempts for failed requests                                                                                                                                                                                                                                    |
-| `BROWSERLESS_CACHE_TTL`     | No       | `60000`                                 | Cache TTL in milliseconds (0 to disable)                                                                                                                                                                                                                                  |
-| `AMPLITUDE_API_KEY`         | No       | —                                       | Amplitude project API key. Sends MCP usage analytics — SDK lifecycle events plus our own tool/skill events                                                                                                                                                                |
-| `MCP_COMPLIANCE_MODE`       | No       | unset (full surface)                    | Serve the reduced, directory-compliant surface. Fails closed: any set value except `false`/`0`/`no`/`off` enables it                                                                                                                                                      |
-
-### Hosted OpenTelemetry
-
-On `httpStream`, set `OTEL_ENABLED=true` and `OTEL_EXPORTER_OTLP_ENDPOINT`
-to a trusted collector's base URL. Metrics and stderr logs are exported over
-OTLP HTTP/protobuf; tracing is disabled. `stdio` never starts this SDK.
-`OTEL_METRIC_EXPORT_INTERVAL` controls the export interval in milliseconds
-(default 60000, minimum 1000).
-
-NodeSDK manages the providers and standard Node runtime instrumentation emits
-`nodejs.*` and `v8js.*` metrics. Application session, tool, account and Redis
-metrics remain under `browserless.mcp.*`. All duration metrics use seconds
-(`s`), memory uses bytes (`By`), and request counters use `{request}`;
-application callers still supply
-milliseconds, converted once by the metric recorders.
-
-`browserless.mcp.auth.duration` and `.auth.in_flight` cover POST authentication,
-not whole request execution. `browserless.mcp.session.cleanup.age` covers tracked
-MCP idle reaps and explicit/idle/cap agent cleanup, not every session close.
-Sweep-discovered MCP age starts at discovery; agent age resets on reconnect.
-`browserless.mcp.accounts.active` counts distinct token hashes per collection
-window. Top-account counts are an INFO log with body event
-`browserless.mcp.account.window`, `active_accounts`, and `top_accounts` (at most
-20 `{hash, count}` entries), not persistent per-account metric series.
-An idle window emits no account log. Stderr text is INFO, `console.warn` is WARN,
-and arguments containing an `Error` are ERROR; stderr records carry
-`log.iostream=stderr`. `OTEL_SDK_DISABLED=true` also disables hosted telemetry.
-
-For dashboards based on the initial telemetry PR: replace custom event-loop
-metrics with `nodejs.eventloop.*`, GC pauses with `v8js.gc.duration`, and active
-resources with `v8js.resource.active`. Drop `_ms` from tool/upstream/Redis
-duration names, use the auth and cleanup names above, and divide millisecond
-thresholds by 1000. Replace `account.requests` queries with the window logs.
-Duration histogram boundaries are also in seconds, covering sub-second Redis
-operations through two-hour sessions. Amplitude event fields and timeout
-configuration remain in milliseconds.
-
-### Skill retrieval diagnostics
-
-`Skill Retrieval Completed` emits once per actual remote skill fetch through
-the existing analytics queue (when `ANALYTICS_ENABLED`, `SQS_QUEUE_URL`, and
-`SQS_REGION` are configured). It is not duplicated through the SDK's
-`AMPLITUDE_API_KEY` transport. Cache hits and concurrent callers sharing a fetch
-do not emit another completion. Failed retrievals remain retryable on the next
-call; this instrumentation adds no retries.
-
-Fields are `result=hit|miss|error`, normalized `domain`, UUID `request_id`,
-`source`, `attempt`, integer `duration_ms`, `stage=fetch|decode|validate`, and
-available `http_status`. `skill_count` appears only on valid responses: positive
-for hits, zero for misses. Errors carry `error_category=timeout|network_error|http_error|invalid_json|invalid_shape`.
-Sources are `cli_agent`, `script_builder`, `autologin`, `agent_run`, `mcp_client`,
-or `unknown`. Each fetch currently has `attempt=1`; no run identifier is
-available at these call sites, so `run_id` is omitted.
-Domains outside the bounded hostname format become `invalid` without dropping
-the completion from the denominator.
-
-Set `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` to a trusted collector's full `/v1/logs`
-URL to export matching `skill.retrieval.failed` WARN records as OTLP/HTTP JSON.
-The default is disabled. Exports have a one-second deadline, at most 16 in-flight
-requests, and no retry. Caught queue/skill analytics errors produce
-`skill.telemetry.delivery_failed` with `originating_event` and the fixed
-diagnostic category `delivery_error`, at most once per minute per process.
-Exporter failures are swallowed without recursively reporting themselves.
-No new log contains tokens, prompts, full URLs, response bodies, or recipe text.
-The queue retains its existing authentication field, separately from log fields.
-
-Example failure attributes:
-
-```json
-{
-  "event.name": "skill.retrieval.failed",
-  "result": "error",
-  "domain": "shop.example",
-  "request_id": "416e0409-25e2-4399-a3fa-6939f43a75e0",
-  "source": "mcp_client",
-  "attempt": 1,
-  "stage": "fetch",
-  "error_category": "http_error",
-  "http_status": 429,
-  "duration_ms": 17
-}
-```
-
-Retrieval error rate is error completions / all completions. Hit rate is hit
-completions / valid completions. Do not add the separate server `Skill Lookup`
-events to either denominator. Tests use local/mock sinks; a configured exporter
-or console message is not proof of remote receipt.
-
-### Failure diagnostics
-
-`MCP Tool Request` retains `analytics_version=2`, the existing coarse
-`error_category`, `status_code`, timing and tool-specific properties. These
-additive diagnostic fields are failure-only; a successful retry has none of them.
-
-| Property               | Meaning                                                                                                                                                                                                                                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `error_reason`         | `selector_miss`, `invalid_params`, `unknown_method`, `script_error`, `unauthorized`, `forbidden`, `not_found`, `server_error`, `session_lost`, `navigation_failed`, `timeout`, `rate_limited`, or `unknown`. Agent errors retain their existing detailed classification; local URL/batch validation is `invalid_params`. |
-| `error_source`         | `validation`, `script`, `target_website`, `api`, `transport`, or `unknown`. This identifies the observed failure boundary, not blame. A 403 alone does not identify its source.                                                                                                                                          |
-| `failed_command_index` | Zero-based index in the invocation's command batch, not the session-wide command counter. Omitted when setup/validation fails before a command starts.                                                                                                                                                                   |
-| `failed_method`        | The failed command's recognized typed method name. Unrecognized free-form method names are omitted to avoid emitting arbitrary input; the index still identifies the command.                                                                                                                                            |
-| `error_code`           | Allowlisted structured codes: the uppercase reason names above, `SELECTOR_NOT_FOUND`, `BROWSER_CRASHED`, `ECONNRESET`, `ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ETIMEDOUT`. Opaque/unrecognized codes are omitted, not copied into messages.                                                                           |
-| `error_status_code`    | An integer HTTP status (100–599) carried by structured error metadata. Never extracted from error prose.                                                                                                                                                                                                                 |
-| `error_status_origin`  | `api` for an observed API response/upgrade, `target_website` for a failed navigation result, otherwise `unknown`. Omitted when no structured status is available.                                                                                                                                                        |
-| `error_message`        | A synthesized summary capped at 500 characters. Raw error messages, response bodies, HTML, scripts, selectors, credentials, cookies, authorization headers and URLs are never copied into this field.                                                                                                                    |
-
-For `browserless_function`, `browserless_export` and `browserless_smartscraper`,
-a failed result's recorded `status_code` sets the reason: 400 from the function
-tool → `script_error` (source `script`), 401 → `unauthorized`, 403 → `forbidden`,
-404 → `not_found`, 408 → `timeout`, 429 → `rate_limited`, 5xx → `server_error`,
-anything else → `unknown`. Function and export statuses are the Browserless API's
-(`error_status_origin=api`); smart scraper statuses are the target website's
-(`error_status_origin=target_website`, `error_source=target_website`). Export 400
-remains `unknown`, with its status retained.
-
-`status_code` keeps its original tool-specific meaning; the new status fields
-do not replace it or turn successful target-page HTTP responses into failures.
-HTTP failures retain API response status even when thrown. Codes are retained
-when already available in structured errors or the JSON body read by the existing
-4xx error handler; diagnostics do not read additional bodies on 5xx failures.
-
-An unsuccessful search without structured evidence reports `error_reason=unknown`
-and `error_message="Unclassified search failure."`. Its legacy `user_error`
-category remains for chart compatibility, not as evidence of caller fault.
-
-Example breakdowns: filter `success=false` and group by `tool → error_reason`;
-for agent calls, group by `failed_method → error_reason`; for HTTP failures,
-group by `error_status_origin → error_status_code`. Missing fields in older
-events mean unavailable instrumentation, not an `unknown` failure. There is no
-historical backfill. Verify representative received events after deployment
-before treating these properties as available in production.
-
-## Live URL instructions
-
-`browserless_live_url` creates viewer links over REST for an existing browser.
-Set `action: "create"`, `browserId`, and `interactable: true` for a human handoff:
-
-```json
-{
-  "action": "create",
-  "browserId": "running-browser-id",
-  "interactable": true,
-  "instructions": {
-    "layout": "panel",
-    "format": "markdown",
-    "title": "Complete sign in",
-    "summary": "Enter your **verification code**.",
-    "steps": ["Open your inbox", "Enter the code"],
-    "currentStep": 2
-  },
-  "doneLabel": "Continue",
-  "failLabel": "Need help",
-  "requesterName": "Support"
-}
-```
-
-Plain string instructions still work. With a string, use top-level
-`instructionsTitle`, `steps`, `currentStep`, and `instructionsFormat`.
-With an object, put these values inside `instructions` as `title`, `steps`,
-`currentStep`, and `format`. Button labels and requester name stay top-level.
-Titles allow 80 characters; up to 10 non-empty steps allow 300 characters each;
-button labels allow 40 characters; requester names allow 60 characters.
-`currentStep` is one-based and must refer to a supplied step. Summary text is
-trimmed and capped at 2048 characters by the server. Steps-only cards are
-supported. Markdown links must use HTTP or HTTPS. The server validates
-cross-field constraints; deployments must support rich REST instructions.
-
-## MCP Resources
-
-| Resource URI             | Description                     |
-| ------------------------ | ------------------------------- |
-| `browserless://api-docs` | Smart scraper API documentation |
-| `browserless://status`   | Live service health status      |
-
-## MCP Prompts
-
-| Prompt            | Description                                 |
-| ----------------- | ------------------------------------------- |
-| `scrape-url`      | Scrape a webpage and summarize its content  |
-| `extract-content` | Extract specific information from a webpage |
-
-## Development
-
-```bash
-npm install
+```sh
+git clone https://github.com/dylancetin/browserless-mcp-selfhosted.git
+cd browserless-mcp-selfhosted
+npm ci
 npm run build
-npm test
-npm run coverage
 ```
 
-### Tests
+Configure your MCP client with the built entrypoint. Replace the path and supply your local Browserless token through the client's secret or environment configuration.
 
-The test suite uses [Mocha](https://mochajs.org/) with [Chai](https://www.chaijs.com/) and [Sinon](https://sinonjs.org/). Specs live alongside the code in `test/` (`test/lib/`, `test/tools/`, `test/prompts/`, `test/resources/`, `test/integration/`) and run against the compiled output in `build/`.
+```json
+{
+  "mcpServers": {
+    "browserless-selfhosted": {
+      "command": "node",
+      "args": ["<checkout>/build/src/index.js"],
+      "env": {
+        "BROWSERLESS_API_URL": "http://localhost:3000",
+        "BROWSERLESS_TOKEN": "<local-browserless-token>"
+      }
+    }
+  }
+}
+```
 
-- `npm test` — compiles TypeScript and runs every `*.spec.js` under `build/test/`. No external services or `BROWSERLESS_TOKEN` are required; the API client is stubbed.
-- `npm run coverage` — runs the suite under [c8](https://github.com/bcoe/c8) with the thresholds configured in `package.json` (lines ≥ 80%, branches ≥ 70%, functions ≥ 80%).
+`BROWSERLESS_API_URL` defaults to `http://localhost:3000`, never a cloud endpoint. It must not contain credentials, a query, or a fragment. This fork is private in npm metadata. Install it from the clone, not the upstream npm package.
 
-Tests run automatically on every pull request via the [Test workflow](.github/workflows/test.yml) on Node 24. PRs must keep the suite green before they can merge.
+See [installation](install.md) for optional HTTP setup and [compatibility](docs/self-hosted-compatibility.md) for the tested versions and removal decisions.
 
-## API Token
+## Use native function returns
 
-Get your API token at [browserless.io](https://browserless.io). The token authenticates all requests to the Browserless API.
+Pass `code`, optional `context`, and optional `timeout` in milliseconds. Use an async ESM default export. It receives one object containing `page` and `context`.
 
-## License
+```js
+export default async ({ page, context }) => {
+  await page.goto(context.url);
+  return { title: await page.title() };
+};
+```
 
-SSPL-1.0
+Return binary bytes directly for MCP image or resource blocks.
+
+```js
+export default async ({ page }) => {
+  await page.setContent('<h1>Self-hosted Browserless</h1>');
+  return await page.screenshot({ type: 'png' });
+};
+```
+
+For a PDF attachment, return `await page.pdf()` instead.
+
+Strings return text or HTML. Objects remain literal JSON, including objects with `data` and `type` fields. Such fields do not select the response MIME type. Code runs in a browser context. Node.js globals such as `process`, `Buffer`, `require`, and `module` are unavailable. Use supported Puppeteer APIs, not the removed `page.waitForTimeout` method. Text results have a 200,000-character limit.
+
+## Run Lighthouse
+
+```json
+{
+  "url": "https://example.com",
+  "categories": ["performance", "seo"],
+  "device": "desktop",
+  "timeout": 120000
+}
+```
+
+Supported categories are `accessibility`, `best-practices`, `performance`, and `seo`. You can also pass a custom Lighthouse `config` and `budgets`. Both tools reject `profile`. Lighthouse returns scores inline and a saved report path for stdio or an authenticated single-use download link for HTTP. Copy reports before the MCP session ends or the 15-minute expiry.
+
+## Verify your instance
+
+After building, run `npm run verify:selfhosted` with your Browserless environment. The script checks the actual built MCP entrypoint, both transports, native binary signatures, errors, and real Lighthouse JSON. For a remote or containerized Browserless instance, set `BROWSERLESS_VERIFY_FIXTURE_HOST` to this machine's hostname or address reachable by the browser. The script starts and stops its own synthetic fixture and temporary MCP processes. `BROWSERLESS_VERIFY_OUTPUT_DIR` selects where it saves reports.
+
+## Credits and license
+
+Forked from [browserless/browserless-mcp](https://github.com/browserless/browserless-mcp). Original author credits and the [SSPL-1.0 license](LICENSE) remain unchanged. This is not the official Browserless cloud connector. Upstream integrations and unregistered modules remain in the tree but are outside this fork's supported setup.

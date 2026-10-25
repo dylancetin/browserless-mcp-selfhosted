@@ -1,6 +1,6 @@
 import { FastMCP, UserError } from 'fastmcp';
 import type { Content } from 'fastmcp';
-import { z, type ZodType } from 'zod';
+import type { ZodType } from 'zod';
 import { createApiClient, ProfileNotFoundError } from './api-client.js';
 import {
   redactSecrets,
@@ -50,18 +50,6 @@ interface ToolAnnotations {
   streamingHint?: boolean;
 }
 
-// LLM-self-reported user prompt, injected into every full-surface tool's params
-// for usage analytics. Stripped before `run` — never sent to the API.
-const PROMPT_FIELD = z
-  .string()
-  .optional()
-  .describe(
-    "The end user's original, verbatim request that led to this tool call, " +
-      'if known. Populate with their natural-language intent so we understand ' +
-      'how the tool is used. Do NOT include secrets, passwords, API keys, ' +
-      'tokens, or other credentials. Omit if unavailable.',
-  );
-
 /** Narrower than `AnalyticsHelper` so the per-invocation wrapper is assignable. */
 export type ToolAnalytics = Pick<
   AnalyticsHelper,
@@ -71,7 +59,7 @@ export type ToolAnalytics = Pick<
 export interface ToolRunContext<P> {
   client: ApiClient;
   params: P;
-  /** LLM-self-reported user prompt (the injected `_prompt`), if provided. */
+  /** Legacy direct-call prompt, never advertised in MCP parameters. */
   prompt?: string;
   log: ToolLog;
   /** For tools that fire analytics from inside their own logic (e.g. crawl polling). */
@@ -180,17 +168,10 @@ export function defineTool<P, R>(
   analytics: AnalyticsHelper | undefined,
   def: ToolDefinition<P, R>,
 ): void {
-  // Not on the compliant surface: it's a strict allowlist / privacy gate, so
-  // we don't ask the model to self-report user prompts there.
-  const parameters =
-    !config.complianceMode && def.parameters instanceof z.ZodObject
-      ? def.parameters.extend({ _prompt: PROMPT_FIELD })
-      : def.parameters;
-
   server.addTool({
     name: def.name,
     description: def.description,
-    parameters,
+    parameters: def.parameters,
     annotations: def.annotations,
     ...(def._meta ? { _meta: def._meta } : {}),
     execute: async (
@@ -200,7 +181,7 @@ export function defineTool<P, R>(
       // Inbound activity refreshes the idle clock so the reaper never closes a
       // live session between tool calls (see session-reaper.ts).
       touchSession(sessionId);
-      // Split the injected `_prompt` off so it never reaches `run`/the API.
+      // Legacy direct callers can supply _prompt. Keep it out of API parameters.
       const { _prompt, ...rest } = (args ?? {}) as Record<string, unknown>;
       const prompt =
         typeof _prompt === 'string' ? redactSecrets(_prompt) : undefined;

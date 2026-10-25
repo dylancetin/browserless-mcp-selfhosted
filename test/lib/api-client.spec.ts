@@ -597,57 +597,61 @@ describe('createApiClient', () => {
       expect(body).to.not.have.property('context');
     });
 
-    it('forwards profile as a query parameter', async () => {
-      fetchStub.resolves(
-        new Response('{}', {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-
-      const client = createApiClient(mockConfig);
-      await client.runFunction({ code: 'test', profile: 'my-login' });
-
-      const [url] = fetchStub.firstCall.args;
-      expect(url).to.include('profile=my-login');
-    });
-
-    it('throws ProfileNotFoundError on 404 with profile set', async () => {
-      fetchStub.resolves(
-        new Response(
-          JSON.stringify({ error: 'Profile "missing" was not found' }),
-          { status: 404, headers: { 'Content-Type': 'application/json' } },
-        ),
-      );
-
+    it('rejects unsupported profile inputs before fetching', async () => {
       const client = createApiClient(mockConfig);
       try {
-        await client.runFunction({ code: 'test', profile: 'missing' });
-        expect.fail('expected ProfileNotFoundError');
+        await client.runFunction({ code: 'test', profile: 'missing' } as never);
+        expect.fail('expected rejection');
       } catch (err) {
-        expect(err).to.be.instanceOf(ProfileNotFoundError);
-        expect((err as ProfileNotFoundError).profile).to.equal('missing');
+        expect((err as Error).message).to.include('profiles are not supported');
       }
+      expect(fetchStub.called).to.be.false;
     });
 
-    it('does not retry on ProfileNotFoundError', async () => {
+    it('does not retry a missing function route', async () => {
       fetchStub.callsFake(() =>
         Promise.resolve(
-          new Response(
-            JSON.stringify({ error: 'Profile "missing" was not found' }),
-            { status: 404, headers: { 'Content-Type': 'application/json' } },
-          ),
+          new Response(JSON.stringify({ error: 'Not Found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          }),
         ),
       );
 
       const client = createApiClient({ ...mockConfig, maxRetries: 3 });
-      try {
-        await client.runFunction({ code: 'test', profile: 'missing' });
-        expect.fail('expected ProfileNotFoundError');
-      } catch (err) {
-        expect(err).to.be.instanceOf(ProfileNotFoundError);
-      }
+      const result = await client.runFunction({ code: 'test' });
+      expect(result.ok).to.be.false;
+      expect(result.statusCode).to.equal(404);
       expect(fetchStub.calledOnce).to.be.true;
+    });
+  });
+
+  describe('self-hosted performance request', () => {
+    it('does not send profile in the query or body', async () => {
+      fetchStub.resolves(
+        new Response(JSON.stringify({ data: {}, type: 'json' })),
+      );
+      await createApiClient(mockConfig).performance({
+        url: 'https://example.com',
+      });
+      const [url, options] = fetchStub.firstCall.args;
+      expect(new URL(url).searchParams.has('profile')).to.be.false;
+      expect(JSON.parse(options.body)).to.deep.equal({
+        url: 'https://example.com',
+      });
+    });
+
+    it('rejects unsupported profile inputs before fetching', async () => {
+      try {
+        await createApiClient(mockConfig).performance({
+          url: 'https://example.com',
+          profile: 'missing',
+        } as never);
+        expect.fail('expected rejection');
+      } catch (err) {
+        expect((err as Error).message).to.include('profiles are not supported');
+      }
+      expect(fetchStub.called).to.be.false;
     });
   });
 
