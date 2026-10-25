@@ -275,7 +275,9 @@ describe('browserless_live_url', () => {
   });
 
   it('retries transient status failures', async () => {
-    const clock = sinon.useFakeTimers();
+    const clock = sinon.useFakeTimers({
+      toFake: ['setTimeout', 'clearTimeout', 'Date'],
+    });
     fetchStub
       .onFirstCall()
       .resolves(new Response('Temporary failure', { status: 500 }));
